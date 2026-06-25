@@ -49,7 +49,7 @@ from cryptography.hazmat.backends import default_backend
 # -------------------------------------------------------------------
 RP_ID = "localhost"
 RP_NAME = "WebAuthn Device POC"
-ORIGIN = "http://localhost:3000"
+ORIGIN = "https://web-auth-poc-ui.vercel.app"
 
 # Store active challenges in memory (maps challenge -> employee_id)
 _active_challenges: dict[str, str] = {}
