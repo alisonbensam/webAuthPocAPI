@@ -56,7 +56,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://web-auth-poc-ui.vercel.app",  # Mobile PWA
-        "https://web-auth-poc-admin-ui.vercel.app",  # Admin Portal
+        "https://web-auth-poc-admin.vercel.app",  # Admin Portal
     ],
     allow_credentials=True,
     allow_methods=["*"],
