@@ -55,8 +55,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",  # Mobile PWA
-        "http://localhost:3001",  # Admin Portal
+        "https://webauthnpocui.vercel.app",  # Mobile PWA
+        "https://webauthnpocadminui.app",  # Admin Portal
     ],
     allow_credentials=True,
     allow_methods=["*"],
