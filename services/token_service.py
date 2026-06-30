@@ -26,19 +26,19 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_DAYS = 365
 
 
-def create_access_token(employee_id: str) -> str:
+def create_access_token(device_id: str) -> str:
     """
     Create a short-lived JWT access token.
 
     Args:
-        employee_id: The employee identifier to encode in the token
+        device_id: The device identifier to encode in the token
 
     Returns:
         Encoded JWT string valid for 15 minutes
     """
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {
-        "sub": employee_id,
+        "sub": device_id,
         "exp": expire,
         "type": "access",
         "iat": datetime.now(timezone.utc),
@@ -46,7 +46,7 @@ def create_access_token(employee_id: str) -> str:
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def create_refresh_token(employee_id: str) -> tuple[str, datetime]:
+def create_refresh_token(device_id: str) -> tuple[str, datetime]:
     """
     Create a long-lived JWT refresh token (365 days).
 
@@ -55,14 +55,14 @@ def create_refresh_token(employee_id: str) -> tuple[str, datetime]:
     refresh token is invalidated by overwriting it in the device record.
 
     Args:
-        employee_id: The employee identifier to encode in the token
+        device_id: The device identifier to encode in the token
 
     Returns:
         Tuple of (encoded JWT string, expiry datetime)
     """
     expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     payload = {
-        "sub": employee_id,
+        "sub": device_id,
         "exp": expire,
         "type": "refresh",
         "iat": datetime.now(timezone.utc),
