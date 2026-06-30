@@ -47,7 +47,9 @@ from cryptography.hazmat.backends import default_backend
 # The RP ID must match the origin's effective domain.
 # For localhost development, we use "localhost".
 # -------------------------------------------------------------------
+RP_ID = "web-auth-poc-ui.vercel.app"
 RP_NAME = "WebAuthn Device POC"
+ORIGIN = "https://web-auth-poc-ui.vercel.app"
 
 # Store active challenges in memory (maps challenge -> device_id)
 _active_challenges: dict[str, str] = {}
