@@ -47,11 +47,9 @@ from cryptography.hazmat.backends import default_backend
 # The RP ID must match the origin's effective domain.
 # For localhost development, we use "localhost".
 # -------------------------------------------------------------------
-RP_ID = "web-auth-poc-ui.vercel.app"
 RP_NAME = "WebAuthn Device POC"
-ORIGIN = "https://web-auth-poc-ui.vercel.app"
 
-# Store active challenges in memory (maps challenge -> employee_id)
+# Store active challenges in memory (maps challenge -> device_id)
 _active_challenges: dict[str, str] = {}
 
 
@@ -69,14 +67,14 @@ def _base64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode(data)
 
 
-def generate_registration_options(employee_id: str) -> dict:
+def generate_registration_options(device_id: str) -> dict:
     """
     Generate WebAuthn registration options for the browser.
 
     What happens:
     - Server generates a random challenge (prevents replay attacks)
     - Server specifies the Relying Party (RP) identity
-    - Server specifies the user identity (employee_id)
+    - Server specifies the user identity (device_id)
     - Server specifies acceptable credential types (platform authenticator)
 
     The browser will use these options in navigator.credentials.create()
@@ -88,7 +86,7 @@ def generate_registration_options(employee_id: str) -> dict:
     - This is what makes WebAuthn phishing-resistant
 
     Args:
-        employee_id: The employee identifier requesting registration
+        device_id: The device identifier requesting registration
 
     Returns:
         Registration options dict to send to the browser
@@ -99,10 +97,10 @@ def generate_registration_options(employee_id: str) -> dict:
     challenge_b64 = _base64url_encode(challenge)
 
     # Store the challenge so we can verify it when the response comes back
-    _active_challenges[challenge_b64] = employee_id
+    _active_challenges[challenge_b64] = device_id
 
-    # User ID must be unique per user — we use a hash of the employee_id
-    user_id = _base64url_encode(hashlib.sha256(employee_id.encode()).digest())
+    # User ID must be unique per user — we use a hash of the device_id
+    user_id = _base64url_encode(hashlib.sha256(device_id.encode()).digest())
 
     options = {
         # The challenge that must be signed by the authenticator
@@ -117,8 +115,8 @@ def generate_registration_options(employee_id: str) -> dict:
         # User information — identifies the device/account
         "user": {
             "id": user_id,
-            "name": employee_id,
-            "displayName": employee_id,
+            "name": device_id,
+            "displayName": device_id,
         },
 
         # We only accept ES256 (ECDSA with P-256 curve)
@@ -208,7 +206,7 @@ def verify_registration(registration_response: dict) -> Optional[dict]:
         if challenge not in _active_challenges:
             return None
 
-        employee_id = _active_challenges.pop(challenge)
+        device_id = _active_challenges.pop(challenge)
 
         # Verify the origin matches our expected origin
         if client_data.get("origin") != ORIGIN:
@@ -284,7 +282,7 @@ def verify_registration(registration_response: dict) -> Optional[dict]:
         return {
             "credential_id": credential_id_b64,
             "public_key": public_key_pem,
-            "employee_id": employee_id,
+            "device_id": device_id,
         }
 
     except Exception as e:
@@ -292,7 +290,7 @@ def verify_registration(registration_response: dict) -> Optional[dict]:
         return None
 
 
-def generate_authentication_options(employee_id: str, credential_id: str) -> dict:
+def generate_authentication_options(device_id: str, credential_id: str) -> dict:
     """
     Generate WebAuthn authentication options for the browser.
 
@@ -306,7 +304,7 @@ def generate_authentication_options(employee_id: str, credential_id: str) -> dic
     This proves the SAME DEVICE that registered is now authenticating.
 
     Args:
-        employee_id: The employee identifier
+        device_id: The device identifier
         credential_id: The stored credential ID (base64url) to allow
 
     Returns:
@@ -317,7 +315,7 @@ def generate_authentication_options(employee_id: str, credential_id: str) -> dic
     challenge_b64 = _base64url_encode(challenge)
 
     # Store the challenge for verification
-    _active_challenges[challenge_b64] = employee_id
+    _active_challenges[challenge_b64] = device_id
 
     options = {
         # Fresh challenge that must be signed by the authenticator's private key
@@ -374,7 +372,7 @@ def verify_authentication(auth_response: dict, stored_public_key_pem: str) -> Op
         stored_public_key_pem: The PEM-encoded public key stored for this credential
 
     Returns:
-        The employee_id if authentication succeeds, None if it fails
+        The device_id if authentication succeeds, None if it fails
     """
     try:
         credential_id = auth_response.get("id", "")
@@ -396,7 +394,7 @@ def verify_authentication(auth_response: dict, stored_public_key_pem: str) -> Op
         if challenge not in _active_challenges:
             return None
 
-        employee_id = _active_challenges.pop(challenge)
+        device_id = _active_challenges.pop(challenge)
 
         # Verify the type
         if client_data.get("type") != "webauthn.get":
@@ -432,7 +430,7 @@ def verify_authentication(auth_response: dict, stored_public_key_pem: str) -> Op
         if not user_present:
             return None
 
-        return employee_id
+        return device_id
 
     except Exception as e:
         print(f"Authentication verification failed: {e}")

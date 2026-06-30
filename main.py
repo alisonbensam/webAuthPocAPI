@@ -10,9 +10,9 @@ Architecture:
 - /token/refresh        → Refresh access token using refresh token
 - /logout               → Invalidate refresh token
 - /device               → Get current device registration info
-- /admin/devices        → List all employee/device records (admin)
+- /admin/devices        → List all device records (admin)
 - /admin/revoke         → Force-revoke a device (admin)
-- /admin/generate-token → Issue an invitation token for an employee (admin)
+- /admin/generate-token → Issue an invitation token for a device (admin)
 - /admin/revoke-token   → Revoke an unused invitation token (admin)
 """
 
@@ -55,8 +55,6 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://web-auth-poc-ui.vercel.app",  # Mobile PWA
-        "https://web-auth-poc-admin.vercel.app",  # Admin Portal
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -90,19 +88,17 @@ def require_admin(x_admin_key: Optional[str] = Header(None)) -> bool:
 # Request/Response Models
 # -------------------------------------------------------------------
 class RegisterOptionsRequest(BaseModel):
-    employee_id: str
-    location: str
-    company_email: str
+    device_id: str
     invitation_token: str
 
 
 class RegisterVerifyRequest(BaseModel):
-    employee_id: str
+    device_id: str
     credential: dict
 
 
 class AuthOptionsRequest(BaseModel):
-    employee_id: Optional[str] = None
+    device_id: Optional[str] = None
 
 
 class AuthVerifyRequest(BaseModel):
@@ -117,11 +113,11 @@ class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     refresh_token_expiry: str
-    employee_id: str
+    device_id: str
 
 
 class DeviceInfoResponse(BaseModel):
-    employee_id: str
+    device_id: str
     location: str
     company_email: str
     credential_id: Optional[str]
@@ -132,24 +128,24 @@ class DeviceInfoResponse(BaseModel):
 
 
 class AdminRevokeRequest(BaseModel):
-    employee_id: str
+    device_id: str
 
 
 class AdminGenerateTokenRequest(BaseModel):
-    employee_id: str
+    device_id: str
 
 
 class AdminRevokeTokenRequest(BaseModel):
-    employee_id: str
+    device_id: str
 
 
 class AdminResetDeviceRequest(BaseModel):
-    employee_id: str
+    device_id: str
 
 
 class AdminDeviceInfo(BaseModel):
     location: str
-    employee_id: str
+    device_id: str
     company_email: str
     is_registered: bool
     credential_id: Optional[str]
@@ -176,8 +172,8 @@ def get_current_device(authorization: Optional[str] = Header(None)) -> Optional[
     if not payload:
         return None
 
-    employee_id = payload.get("sub")
-    return DEVICE_TABLE.get(employee_id)
+    device_id = payload.get("sub")
+    return DEVICE_TABLE.get(device_id)
 
 
 # -------------------------------------------------------------------
@@ -189,8 +185,8 @@ async def register_options(request: RegisterOptionsRequest):
     Validate the invitation token, then generate WebAuthn registration options.
 
     Onboarding flow (no username/password):
-    - Employee enters Location, Employee ID, Company Email, and Invitation Token
-    - Server confirms the employee exists and the details match the record
+    - User enters Device ID and Invitation Token
+    - Server confirms the device exists
     - Server validates the invitation token (issued, unused, unexpired, matching)
     - Only then are registration options returned
 
@@ -203,18 +199,8 @@ async def register_options(request: RegisterOptionsRequest):
       * Public key → included in the response sent back to server
     - Frontend sends the response to /register/verify
     """
-    device = DEVICE_TABLE.get(request.employee_id)
+    device = DEVICE_TABLE.get(request.device_id)
     if not device:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid or expired invitation token. Please contact your administrator.",
-        )
-
-    # Confirm the supplied employee details match the record (defense in depth)
-    if (
-        device.location != request.location
-        or device.company_email != request.company_email
-    ):
         raise HTTPException(
             status_code=400,
             detail="Invalid or expired invitation token. Please contact your administrator.",
@@ -228,7 +214,7 @@ async def register_options(request: RegisterOptionsRequest):
             detail="Invalid or expired invitation token. Please contact your administrator.",
         )
 
-    options = generate_registration_options(request.employee_id)
+    options = generate_registration_options(request.device_id)
     return options
 
 
@@ -244,7 +230,7 @@ async def register_verify(request: RegisterVerifyRequest):
     1. Receive the attestation response from navigator.credentials.create()
     2. Decode and verify the attestation object
     3. Extract the credential_id and public_key
-    4. REPLACE any existing credential for this employee
+    4. REPLACE any existing credential for this device
        → This is the device replacement mechanism!
        → Old phone's passkey immediately becomes invalid
     5. Revoke the previous refresh token (old device session ends)
@@ -260,9 +246,9 @@ async def register_verify(request: RegisterVerifyRequest):
     - Old device's old refresh token no longer matches → refresh FAILS
     - Old device is automatically rejected — no manual logout needed!
     """
-    device = DEVICE_TABLE.get(request.employee_id)
+    device = DEVICE_TABLE.get(request.device_id)
     if not device:
-        raise HTTPException(status_code=404, detail="Employee not found")
+        raise HTTPException(status_code=404, detail="Device not found")
 
     # Re-validate the invitation token at verify time so a token cannot be
     # consumed unless it is still valid (it may have expired or been revoked
@@ -282,8 +268,8 @@ async def register_verify(request: RegisterVerifyRequest):
     # Issuing a new refresh token here automatically revokes the previous
     # device's session (its old refresh token no longer matches the record).
     now = datetime.now(timezone.utc)
-    refresh_token, refresh_expiry = create_refresh_token(result["employee_id"])
-    access_token = create_access_token(result["employee_id"])
+    refresh_token, refresh_expiry = create_refresh_token(result["device_id"])
+    access_token = create_access_token(result["device_id"])
 
     # Update the device record with the new credential (device replacement)
     device.credential_id = result["credential_id"]
@@ -301,7 +287,7 @@ async def register_verify(request: RegisterVerifyRequest):
         access_token=access_token,
         refresh_token=refresh_token,
         refresh_token_expiry=refresh_expiry.isoformat(),
-        employee_id=result["employee_id"],
+        device_id=result["device_id"],
     )
 
 
@@ -318,7 +304,7 @@ async def auth_options(request: AuthOptionsRequest):
     - But the device might still have a valid passkey in Secure Enclave
 
     Flow:
-    1. Server checks if credential_id exists for this employee_id
+    1. Server checks if credential_id exists for this device_id
     2. If yes → return options with allowCredentials pointing to that credential
     3. Browser calls navigator.credentials.get(options)
     4. If the passkey exists on THIS device → biometric prompt → signed challenge
@@ -327,20 +313,20 @@ async def auth_options(request: AuthOptionsRequest):
     For discoverable credentials (passkeys), we can also return options
     without specifying allowCredentials — the browser will check all available passkeys.
     """
-    # If employee_id is provided, look up their specific credential
-    if request.employee_id:
-        device = DEVICE_TABLE.get(request.employee_id)
+    # If device_id is provided, look up their specific credential
+    if request.device_id:
+        device = DEVICE_TABLE.get(request.device_id)
         if not device or not device.credential_id:
             raise HTTPException(
                 status_code=404,
                 detail="No registered credential found for this device"
             )
         options = generate_authentication_options(
-            request.employee_id, device.credential_id
+            request.device_id, device.credential_id
         )
         return options
 
-    # If no employee_id, generate options for discoverable credentials
+    # If no device_id, generate options for discoverable credentials
     # This allows the browser to find any passkey it has for this RP
     import secrets
     from services.webauthn_service import _base64url_encode, RP_ID
@@ -348,7 +334,7 @@ async def auth_options(request: AuthOptionsRequest):
     challenge = secrets.token_bytes(32)
     challenge_b64 = _base64url_encode(challenge)
 
-    # Store challenge with empty employee_id — we'll look it up after verification
+    # Store challenge with empty device_id — we'll look it up after verification
     from services.webauthn_service import _active_challenges
     _active_challenges[challenge_b64] = ""
 
@@ -371,14 +357,14 @@ async def auth_verify(request: AuthVerifyRequest):
 
     What happens:
     1. Receive the assertion response from navigator.credentials.get()
-    2. Find which employee this credential belongs to
+    2. Find which device this credential belongs to
     3. Verify the signature using the STORED public key
     4. If signature is valid → same device that registered → issue tokens
     5. If signature is INVALID → different device or credential was replaced → REJECT
 
     Why rejected credentials mean device replacement:
     - Phone A registers → stores public_key_A on server
-    - Phone B registers same employee → stores public_key_B (REPLACES A)
+    - Phone B registers same device → stores public_key_B (REPLACES A)
     - Phone A tries to authenticate → signs with private_key_A
     - Server verifies with public_key_B → FAILS!
     - Result: Phone A gets "device replaced" error
@@ -399,9 +385,9 @@ async def auth_verify(request: AuthVerifyRequest):
         )
 
     # Verify the authentication response using the stored public key.
-    # NOTE: verify_authentication returns the employee_id associated with the
+    # NOTE: verify_authentication returns the device_id associated with the
     # challenge on success, or None on failure. In discoverable-credential mode
-    # that employee_id may be an empty string (""), which is falsy — so we must
+    # that device_id may be an empty string (""), which is falsy — so we must
     # check `is None` here, NOT `if not result`. Using `if not result` would
     # wrongly reject a VALID discoverable passkey sign-in as "device_replaced".
     result = verify_authentication(request.credential, device.public_key)
@@ -413,8 +399,8 @@ async def auth_verify(request: AuthVerifyRequest):
 
     # Authentication successful — issue new tokens
     now = datetime.now(timezone.utc)
-    refresh_token, refresh_expiry = create_refresh_token(device.employee_id)
-    access_token = create_access_token(device.employee_id)
+    refresh_token, refresh_expiry = create_refresh_token(device.device_id)
+    access_token = create_access_token(device.device_id)
 
     # Update device record
     device.last_login = now
@@ -425,7 +411,7 @@ async def auth_verify(request: AuthVerifyRequest):
         access_token=access_token,
         refresh_token=refresh_token,
         refresh_token_expiry=refresh_expiry.isoformat(),
-        employee_id=device.employee_id,
+        device_id=device.device_id,
     )
 
 
@@ -454,8 +440,8 @@ async def token_refresh(request: TokenRefreshRequest):
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
-    employee_id = payload.get("sub")
-    device = DEVICE_TABLE.get(employee_id)
+    device_id = payload.get("sub")
+    device = DEVICE_TABLE.get(device_id)
 
     if not device:
         raise HTTPException(status_code=401, detail="Device not found")
@@ -466,14 +452,14 @@ async def token_refresh(request: TokenRefreshRequest):
         raise HTTPException(status_code=401, detail="Token has been revoked")
 
     # Issue a new access token (refresh token stays the same)
-    access_token = create_access_token(employee_id)
+    access_token = create_access_token(device_id)
     device.last_login = datetime.now(timezone.utc)
 
     return TokenResponse(
         access_token=access_token,
         refresh_token=device.refresh_token,
         refresh_token_expiry=device.refresh_token_expiry.isoformat(),
-        employee_id=employee_id,
+        device_id=device_id,
     )
 
 
@@ -492,8 +478,8 @@ async def logout(request: TokenRefreshRequest):
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    employee_id = payload.get("sub")
-    device = DEVICE_TABLE.get(employee_id)
+    device_id = payload.get("sub")
+    device = DEVICE_TABLE.get(device_id)
 
     if device:
         device.refresh_token = None
@@ -516,7 +502,7 @@ async def get_device_info(device: Optional[DeviceRecord] = Depends(get_current_d
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     return DeviceInfoResponse(
-        employee_id=device.employee_id,
+        device_id=device.device_id,
         location=device.location,
         company_email=device.company_email,
         credential_id=device.credential_id,
@@ -537,7 +523,7 @@ def _build_admin_device_info(device: DeviceRecord) -> AdminDeviceInfo:
     """Map an internal DeviceRecord to the admin-facing response model."""
     return AdminDeviceInfo(
         location=device.location,
-        employee_id=device.employee_id,
+        device_id=device.device_id,
         company_email=device.company_email,
         is_registered=device.credential_id is not None,
         credential_id=device.credential_id,
@@ -555,9 +541,9 @@ def _build_admin_device_info(device: DeviceRecord) -> AdminDeviceInfo:
 @app.get("/admin/devices", response_model=list[AdminDeviceInfo])
 async def admin_list_devices(_: bool = Depends(require_admin)):
     """
-    Return all employee/device records and their registration/session status.
+    Return all device records and their registration/session status.
 
-    Used by the admin panel to display every employee, whether they have
+    Used by the admin panel to display every device, whether it has
     a registered passkey, their current session status, and any outstanding
     invitation token.
 
@@ -587,16 +573,16 @@ async def admin_revoke_device(
     Result — the targeted device is signed out on its next app open:
     - /token/refresh → stored refresh_token is None → rejected (401)
     - /auth/verify   → no credential_id to match → rejected (device_replaced)
-    The employee must onboard again with a new invitation token to use the app.
+    The device must onboard again with a new invitation token to use the app.
 
     This is the administrator equivalent of the automatic revocation that
-    happens when a new device registers for the same employee.
+    happens when a new device registers for the same device ID.
 
     Requires the X-Admin-Key header.
     """
-    device = DEVICE_TABLE.get(request.employee_id)
+    device = DEVICE_TABLE.get(request.device_id)
     if not device:
-        raise HTTPException(status_code=404, detail="Employee not found")
+        raise HTTPException(status_code=404, detail="Device not found")
 
     # Wipe all auth-critical fields so BOTH refresh and passkey auth fail
     device.credential_id = None
@@ -618,17 +604,17 @@ async def admin_generate_token(
     _: bool = Depends(require_admin),
 ):
     """
-    Generate a new invitation token for an employee.
+    Generate a new invitation token for a device.
 
     The token is created on demand, is single-use, and expires after a
     configurable window (default 24 hours). Generating a new token overwrites
-    any previously issued-but-unused token for the employee.
+    any previously issued-but-unused token for the device.
 
     Requires the X-Admin-Key header.
     """
-    device = DEVICE_TABLE.get(request.employee_id)
+    device = DEVICE_TABLE.get(request.device_id)
     if not device:
-        raise HTTPException(status_code=404, detail="Employee not found")
+        raise HTTPException(status_code=404, detail="Device not found")
 
     issue_invitation_token(device)
     return _build_admin_device_info(device)
@@ -643,7 +629,7 @@ async def admin_revoke_token(
     _: bool = Depends(require_admin),
 ):
     """
-    Revoke an employee's outstanding invitation token before it is used.
+    Revoke a device's outstanding invitation token before it is used.
 
     Clears the token and its expiry so it can no longer be validated. Does NOT
     affect an already-registered device or its session — it only cancels a
@@ -651,9 +637,9 @@ async def admin_revoke_token(
 
     Requires the X-Admin-Key header.
     """
-    device = DEVICE_TABLE.get(request.employee_id)
+    device = DEVICE_TABLE.get(request.device_id)
     if not device:
-        raise HTTPException(status_code=404, detail="Employee not found")
+        raise HTTPException(status_code=404, detail="Device not found")
 
     revoke_invitation_token(device)
     return _build_admin_device_info(device)
@@ -668,7 +654,7 @@ async def admin_reset_device(
     _: bool = Depends(require_admin),
 ):
     """
-    Reset an employee's device registration.
+    Reset a device's registration.
 
     What this does:
     1. Removes credential_id + public_key → passkey no longer recognized
@@ -677,14 +663,14 @@ async def admin_reset_device(
     4. Sets status to "not_registered"
 
     Unlike /admin/revoke which sets status="revoked", reset returns the
-    employee to a clean state as if they never registered. They can then
-    onboard a device again with a new invitation token.
+    device to a clean state as if it never registered. It can then
+    onboard again with a new invitation token to use the app.
 
     Requires the X-Admin-Key header.
     """
-    device = DEVICE_TABLE.get(request.employee_id)
+    device = DEVICE_TABLE.get(request.device_id)
     if not device:
-        raise HTTPException(status_code=404, detail="Employee not found")
+        raise HTTPException(status_code=404, detail="Device not found")
 
     # Clear all registration and session data
     device.credential_id = None
